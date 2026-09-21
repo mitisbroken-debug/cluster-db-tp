@@ -1,27 +1,111 @@
 services:
-  db-test:
+  node1:
     image: postgres:16
-    container_name: db-test
+    container_name: node1
     restart: unless-stopped
     environment:
       POSTGRES_USER: aplicacion
-      POSTGRES_PASSWORD: test1234
-      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${NODE_PASSWORD}
+      POSTGRES_DB: clusterdb
+      REPL_PASSWORD: ${REPL_PASSWORD}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      MONITOR_PASSWORD: ${MONITOR_PASSWORD}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
-      - db-test-data:/var/lib/postgresql/data
+      - node1-data:/var/lib/postgresql/data
+      - ./config/init-primary.sh:/docker-entrypoint-initdb.d/init-primary.sh:ro
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "hba_file=/etc/postgresql/pg_hba.conf"
 
-  postgres-exporter:
-    image: prometheuscommunity/postgres-exporter:latest
-    container_name: postgres-exporter
+  node2:
+    image: postgres:16
+    container_name: node2
     restart: unless-stopped
     environment:
-      DATA_SOURCE_NAME: "postgresql://aplicacion:test1234@db-test:5432/postgres?sslmode=disable"
+      PGDATA: /var/lib/postgresql/data
+      REPL_PASSWORD: ${REPL_PASSWORD}
+    ports:
+      - "5434:5432"
+    volumes:
+      - node2-data:/var/lib/postgresql/data
+      - ./config/init-replica.sh:/init-replica.sh:ro
+    entrypoint: ["/bin/bash", "/init-replica.sh"]
+    depends_on:
+      - node1
+
+  node3:
+    image: postgres:16
+    container_name: node3
+    restart: unless-stopped
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      REPL_PASSWORD: ${REPL_PASSWORD}
+    ports:
+      - "5435:5432"
+    volumes:
+      - node3-data:/var/lib/postgresql/data
+      - ./config/init-replica.sh:/init-replica.sh:ro
+    entrypoint: ["/bin/bash", "/init-replica.sh"]
+    depends_on:
+      - node1
+
+  proxy:
+    image: haproxy:2.9
+    container_name: proxy
+    restart: unless-stopped
+    volumes:
+      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "5432:5432"
+      - "5436:5433"
+    depends_on:
+      - node1
+      - node2
+      - node3
+
+  postgres-exporter-node1:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter-node1
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://monitorizacion:${MONITOR_PASSWORD}@node1:5432/clusterdb?sslmode=disable"
     ports:
       - "9187:9187"
     depends_on:
-      - db-test
+      - node1
+
+  postgres-exporter-node2:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter-node2
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://monitorizacion:${MONITOR_PASSWORD}@node2:5432/clusterdb?sslmode=disable"
+    ports:
+      - "9188:9187"
+    depends_on:
+      - node2
+
+  postgres-exporter-node3:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter-node3
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://monitorizacion:${MONITOR_PASSWORD}@node3:5432/clusterdb?sslmode=disable"
+    ports:
+      - "9189:9187"
+    depends_on:
+      - node3
+
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
@@ -31,7 +115,9 @@ services:
     ports:
       - "9090:9090"
     depends_on:
-      - postgres-exporter
+      - postgres-exporter-node1
+      - postgres-exporter-node2
+      - postgres-exporter-node3
 
   grafana:
     image: grafana/grafana:latest
@@ -47,60 +133,8 @@ services:
     depends_on:
       - prometheus
 
-    
-  node1:
-    image: bitnami/postgresql:16
-    container_name: node1
-    restart: unless-stopped
-    environment:
-      POSTGRESQL_REPLICATION_MODE: master
-      POSTGRESQL_REPLICATION_USER: replicator
-      POSTGRESQL_REPLICATION_PASSWORD: ${REPL_PASSWORD}
-      POSTGRESQL_USERNAME: aplicacion
-      POSTGRESQL_PASSWORD: ${NODE_PASSWORD}
-      POSTGRESQL_DATABASE: clusterdb
-    ports:
-      - "5433:5432"
-    volumes:
-      - node1-data:/bitnami/postgresql
-
-  node2:
-    image: bitnami/postgresql:16
-    container_name: node2
-    restart: unless-stopped
-    environment:
-      POSTGRESQL_REPLICATION_MODE: slave
-      POSTGRESQL_REPLICATION_USER: replicator
-      POSTGRESQL_REPLICATION_PASSWORD: ${REPL_PASSWORD}
-      POSTGRESQL_MASTER_HOST: node1
-      POSTGRESQL_PASSWORD: ${NODE_PASSWORD}
-    ports:
-      - "5434:5432"
-    volumes:
-      - node2-data:/bitnami/postgresql
-    depends_on:
-      - node1
-
-  node3:
-    image: bitnami/postgresql:16
-    container_name: node3
-    restart: unless-stopped
-    environment:
-      POSTGRESQL_REPLICATION_MODE: slave
-      POSTGRESQL_REPLICATION_USER: replicator
-      POSTGRESQL_REPLICATION_PASSWORD: ${REPL_PASSWORD}
-      POSTGRESQL_MASTER_HOST: node1
-      POSTGRESQL_PASSWORD: ${NODE_PASSWORD}
-    ports:
-      - "5435:5432"
-    volumes:
-      - node3-data:/bitnami/postgresql
-    depends_on:
-      - node1
-
 volumes:
-  db-test-data:
-  grafana-data:
   node1-data:
   node2-data:
   node3-data:
+  grafana-data:

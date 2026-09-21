@@ -1,8 +1,8 @@
 Pruebas de operatividad — Escenarios de falla
 
-**Fecha de ejecución:** [completar]
-**Nodos del clúster:** db-node1 (primario), db-node2 (secundario), db-node3 (secundario)
-**Cliente usado:** cluster-client (Node.js), apuntando a [host/puerto del proxy]
+**Fecha de ejecución:** 21/09/2026
+**Nodos del clúster:** node1 (primario), node2 (secundario), node3 (secundario)
+**Cliente usado:** cluster-client (Node.js), apuntando a localhost:5432 (proxy HAProxy)
 
 ---
 
@@ -12,24 +12,22 @@ Escenario A — Todos los nodos activos
 
 | Métrica | Valor observado |
 |---|---|
-| Tiempo de respuesta promedio | |
-| TPS/QPS | |
-| Latencia | |
-| CPU (por nodo) | |
-| RAM (por nodo) | |
-| I/O | |
+| Tiempo de respuesta promedio | ~2ms |
+| TPS/QPS | (pendiente, se mide en el benchmark de Fede con pgbench) |
+| Latencia | 2ms, estable |
+| CPU (por nodo) | (pendiente — correr `docker stats` en este momento) |
+| RAM (por nodo) | (pendiente — correr `docker stats` en este momento) |
+| I/O | (pendiente — correr `docker stats` en este momento) |
 
 **Observaciones del cliente (resultados.csv):**
-- Estado: [OK / FALLO]
-- Nodo que atendió las consultas:
-
----
+- Estado: OK
+- Nodo que atendió las consultas: 172.19.0.2 (node1, primario)
 
 Escenario B — Nodo secundario fuera de servicio
 
 **Comando ejecutado:**
 ```bash
-docker stop db-node3
+docker stop node3
 ```
 
 **Hora exacta del comando:** [completar]
@@ -50,7 +48,7 @@ Escenario C — Recuperación del nodo
 
 **Comando ejecutado:**
 ```bash
-docker start db-node3
+docker start node3
 ```
 
 **Hora exacta del comando:** [completar]
@@ -70,7 +68,7 @@ Escenario D — Fallo del nodo primario
 
 **Comando ejecutado:**
 ```bash
-docker stop db-node1
+docker stop node1
 ```
 
 **Hora exacta del comando:** [completar]

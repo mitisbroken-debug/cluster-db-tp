@@ -4,4 +4,9 @@ global:
 scrape_configs:
   - job_name: 'postgres'
     static_configs:
-      - targets: ['postgres-exporter:9187']
+      - targets:
+          - 'postgres-exporter-node1:9187'
+          - 'postgres-exporter-node2:9187'
+          - 'postgres-exporter-node3:9187'
+        labels:
+          cluster: 'cluster-db-tp'

@@ -1,0 +1,8 @@
+#!/bin/bash
+set -e
+
+psql -U "$POSTGRESQL_USERNAME" -d "$POSTGRESQL_DATABASE" <<-EOSQL
+  CREATE USER administrador WITH SUPERUSER PASSWORD '${ADMIN_PASSWORD}';
+  CREATE USER monitorizacion WITH PASSWORD '${MONITOR_PASSWORD}';
+  GRANT pg_monitor TO monitorizacion;
+EOSQL
