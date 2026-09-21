@@ -47,6 +47,60 @@ services:
     depends_on:
       - prometheus
 
+    
+  node1:
+    image: bitnami/postgresql:16
+    container_name: node1
+    restart: unless-stopped
+    environment:
+      POSTGRESQL_REPLICATION_MODE: master
+      POSTGRESQL_REPLICATION_USER: replicator
+      POSTGRESQL_REPLICATION_PASSWORD: ${REPL_PASSWORD}
+      POSTGRESQL_USERNAME: aplicacion
+      POSTGRESQL_PASSWORD: ${NODE_PASSWORD}
+      POSTGRESQL_DATABASE: clusterdb
+    ports:
+      - "5433:5432"
+    volumes:
+      - node1-data:/bitnami/postgresql
+
+  node2:
+    image: bitnami/postgresql:16
+    container_name: node2
+    restart: unless-stopped
+    environment:
+      POSTGRESQL_REPLICATION_MODE: slave
+      POSTGRESQL_REPLICATION_USER: replicator
+      POSTGRESQL_REPLICATION_PASSWORD: ${REPL_PASSWORD}
+      POSTGRESQL_MASTER_HOST: node1
+      POSTGRESQL_PASSWORD: ${NODE_PASSWORD}
+    ports:
+      - "5434:5432"
+    volumes:
+      - node2-data:/bitnami/postgresql
+    depends_on:
+      - node1
+
+  node3:
+    image: bitnami/postgresql:16
+    container_name: node3
+    restart: unless-stopped
+    environment:
+      POSTGRESQL_REPLICATION_MODE: slave
+      POSTGRESQL_REPLICATION_USER: replicator
+      POSTGRESQL_REPLICATION_PASSWORD: ${REPL_PASSWORD}
+      POSTGRESQL_MASTER_HOST: node1
+      POSTGRESQL_PASSWORD: ${NODE_PASSWORD}
+    ports:
+      - "5435:5432"
+    volumes:
+      - node3-data:/bitnami/postgresql
+    depends_on:
+      - node1
+
 volumes:
   db-test-data:
   grafana-data:
+  node1-data:
+  node2-data:
+  node3-data:
