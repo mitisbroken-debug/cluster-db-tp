@@ -1,6 +1,6 @@
 Clúster de Base de Datos con Docker — PostgreSQL
 
-**Equipo:** Brian Vega Agustín y Fede
+**Equipo:** Brian Vega Agustín y Rios Federico Marcial
 
 ---
 
