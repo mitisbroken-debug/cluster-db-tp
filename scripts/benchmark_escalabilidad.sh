@@ -6,7 +6,7 @@ CLIENTES=50
 
 mkdir -p /tmp/benchmark-results
 
-echo "=== 1 nodo (solo node1, sin réplicas) ==="
+echo "=== 1 nodo (solo node1, sin r??plicas) ==="
 PGPASSWORD=$NODE_PASSWORD pgbench -S -c $CLIENTES -j 4 -T $DURATION -h node1 -p 5432 -U aplicacion clusterdb | tee /tmp/benchmark-results/1nodo.txt
 
 echo ""

@@ -1,15 +1,15 @@
-# Clúster de Base de Datos con Docker — PostgreSQL
+Clúster de Base de Datos con Docker — PostgreSQL
 
 **Equipo:** Brian Vega Agustín y Fede
 
 ---
 
-## 1. Arquitectura Propuesta
+1. Arquitectura Propuesta
 
-### Diseño General
+Diseño General
 **1 nodo primario (node1) + 2 nodos secundarios (node2, node3)** con replicación streaming asíncrona.
 
-#### Diagrama de Arquitectura Simplificada
+Diagrama de Arquitectura Simplificada
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -35,7 +35,7 @@
             (Replicación Streaming WAL)
 ```
 
-#### Diagrama de Infraestructura Completa
+Diagrama de Infraestructura Completa
 
 ```
 ╔════════════════════════════════════════════════════════════════════════╗
@@ -143,7 +143,7 @@
 ╚════════════════════════════════════════════════════════════════════════╝
 ```
 
-#### Flujo de Datos
+Flujo de Datos
 
 ```
 ESCRITURAS (Write path):
@@ -360,304 +360,42 @@ docker exec -it node1 bash -c "cd /tmp && chmod +x benchmark_escalabilidad.sh &&
 - Latencia promedio
 - Verificar CPU/RAM: `docker stats --no-stream`
 
-### 7.3 Resultados Obtenidos
+## 7.3 Resultados Obtenidos
 
-**Concurrencia (inicialmente fallaban 100-200 por límite de conexiones):**
+**Concurrencia (pgbench -i -s 10, 30s por corrida, 3 repeticiones):**
 
-| Clientes | TPS Promedio | Latencia (ms) |
+| Clientes | TPS promedio | Latencia promedio (ms) |
 |---|---|---|
-| 10 | 185.3 | 54.1 |
-| 25 | 191.4 | 146.1 |
-| 50 | 251.5 | 198.9 |
+| 10 | 184.97 | 54.07 |
+| 25 | 191.36 | 146.12 |
+| 50 | 251.50 | 198.90 |
+| 100 | 0 (fallo) | — |
+| 200 | 0 (fallo) | — |
 
-**Escalabilidad:**
+Con 100 y 200 clientes concurrentes el benchmark falló por completo (TPS 0) — indicio de que se alcanzó el límite de `max_connections` de PostgreSQL (valor por defecto ~100), sin margen para las conexiones adicionales del proxy y los exporters de monitorización.
 
-| Nodos | TPS Agregado | Latencia Promedio |
+**Escalabilidad (pgbench -S, solo lectura, 50 clientes, 30s, ejecutado en paralelo contra 1/2/3 nodos):**
+
+| Nodos activos | TPS agregado | Latencia promedio |
 |---|---|---|
-| 1 | ~120,758 | 0.414 ms |
-| 2 | ~106,538 | 0.689-1.47 ms |
-| 3 | ~108,856 | 1.095-1.59 ms |
+| 1 (solo node1) | 37,131 | 1.35 ms |
+| 2 (node1 + node2) | 34,927 | 2.98 ms |
+| 3 (node1 + node2 + node3) | 34,739 | 4.47 ms |
 
-**Conclusión:** Sistema escala bien hasta 50 clientes. De 1→3 nodos se mantiene TPS estable (~108K vs 120K) pero **latencia por cliente aumenta** por contención de red. El agregado de nodos es principalmente para redundancia y lecturas distribuidas, no para aumentar TPS total.
+## 8.1 ¿Agregar Nodos Realmente Mejora el Rendimiento?
 
----
+**No, en este entorno.** El TPS agregado cae un 5.9% al pasar de 1 a 2 nodos, y un 6.4% al pasar a 3, mientras la latencia promedio se **triplica** (1.35ms → 4.47ms).
 
-## 8. Análisis Detallado de Resultados
+**Por qué:** los 3 contenedores comparten la misma máquina host — mismo CPU, misma red virtual Docker. Al correr benchmarks en paralelo contra los 3 nodos simultáneamente, en vez de sumar capacidad, compiten por los mismos recursos físicos subyacentes. Esto no es una limitación de PostgreSQL ni de la arquitectura de replicación en sí, sino del entorno de laboratorio (todo corriendo en un solo host físico) — en un despliegue real con cada nodo en hardware separado, se esperaría que el TPS agregado sí escale con cada nodo adicional, ya que cada uno tendría su propio CPU y ancho de banda de red dedicados.
 
-### 8.1 ¿Agregar Nodos Realmente Mejora el Rendimiento?
+**Cuándo sí mejoraría en este entorno:** con hardware separado por nodo, o con cargas de trabajo que no satura CPU (consultas más livianas), el beneficio de distribuir lecturas entre réplicas se vería reflejado en el TPS total.
 
-**Respuesta corta:** NO universalmente. Depende del tipo de carga.
+## 8.2 Cuellos de botella identificados (con evidencia real)
 
-#### Análisis de Escalabilidad (1, 2, 3 nodos)
+- **`max_connections`**: confirmado como límite duro — el benchmark de 100 y 200 clientes falló completamente (TPS 0), evidencia directa de que se alcanzó el tope de conexiones simultáneas soportadas
+- **CPU/recursos compartidos del host**: inferido de la caída de TPS agregado al sumar nodos en el mismo host (no medido con herramienta externa, pero consistente con el patrón de los números)
+- **Latencia creciente con más nodos activos**: 1.35ms → 2.98ms → 4.47ms, evidencia directa de contención de recursos compartidos
 
-**Datos crudos:**
-
-| Nodos | TPS Agregado | Latencia promedio | Delta TPS | Análisis |
-|---|---|---|---|---|
-| **1 nodo** | 120,758 TPS | 0.414 ms | — | Baseline |
-| **2 nodos** | 106,538 TPS | 1.08 ms | -11.8% ⚠️ | Cae rendimiento |
-| **3 nodos** | 108,856 TPS | 1.35 ms | -9.8% ⚠️ | Sigue siendo menor |
-
-**¿Por qué cae el TPS en lugar de subir?**
-
-1. **Carga de replicación** (~5-7% del overhead):
-   - Cada escritura en node1 debe replicarse a node2 y node3
-   - WAL streaming consume CPU y ancho de banda
-   - Sincronización de buffers entre nodos
-
-2. **Contención de red** (~3-5%):
-   - La red Docker virtual es compartida entre 3 PostgreSQL + HAProxy + exporters
-   - Latencia inter-proceso aumenta de 0.4ms → 1.3ms (3x)
-   - Congestionamiento en los sockets de comunicación
-
-3. **Overhead de HAProxy/Load Balancer** (~2-3%):
-   - El proxy debe distribuir lecturas entre múltiples targets
-   - Decisiones de routing añaden latencia
-
-4. **Límite de CPU (algoritmo de pgbench)**:
-   - pgbench está CPU-bound en lectura pura
-   - Añadir nodos no multiplica CPU disponibles (1 core por contenedor)
-   - Los 3 nodos compiten por recursos de la máquina host
-
-**Conclusión:** En este escenario de **READ-ONLY con pequeño dataset en caché**, agregar nodos **REDUCE** rendimiento total porque el overhead de coordinación > beneficio de dispersión.
-
-#### Cuándo SÍ mejora agregar nodos
-
-Agregar nodos **mejora** en estos escenarios:
-- ✅ **Cargas mixtas (read/write):** Lecturas distribuidas entre réplicas, escrituras en primario
-- ✅ **Alto número de clientes:** Múltiples conexiones simultáneas distribuidas
-- ✅ **Queries complejas:** Réplicas procesan análisis sin afectar OLTP
-- ✅ **Alta disponibilidad:** Failover automático (con Patroni)
-
-No mejora en:
-- ❌ **Read-only puro en caché:** Contención > beneficio
-- ❌ **Bajo número de clientes:** Latencia inter-nodo no compensada
-- ❌ **CPU-bound queries:** Agregar nodos no añade CPU total
-
----
-
-### 8.2 Identificación de Cuellos de Botella
-
-Evidencia obtenida de los benchmarks y monitoreo:
-
-#### **Cuello de Botella #1: CPU (Primario)**
-
-**Evidencia:**
-```bash
-docker stats --no-stream | grep node1
-# node1: 65-78% CPU durante benchmark de 50 clientes
-```
-
-**Análisis:**
-- node1 acumula todas las escrituras (INSERT, UPDATE, DELETE)
-- Replicación agrega ~15% extra de CPU
-- pgbench en el primario consume thread de WAL sender
-
-**Impacto:** TPS limitado a ~250 porque CPU llega a techo  
-**Solución:** Usar máquina con más cores (actualmente 1 core por contenedor)
-
----
-
-#### **Cuello de Botella #2: Red (Docker virtual bridge)**
-
-**Evidencia:**
-- Latencia de 1 nodo (0.414ms) → 3 nodos (1.35ms) = **3.26x aumento**
-- HAProxy → node2/node3: ~1-2ms round-trip en red Docker
-- WAL replication streams: comparten ancho de banda
-
-**Análisis:**
-- La red Docker virtual no está optimizada para comunicación intensiva
-- Cada consulta en node2/node3 debe pasar por HAProxy + red interna
-- WAL streaming es continuo mientras corre benchmark
-
-**Impacto:** Latencia crece exponencialmente con cantidad de nodos  
-**Solución:** Host networking (--net host) o red host real
-
----
-
-#### **Cuello de Botella #3: Memoria (shared_buffers limitado)**
-
-**Evidencia:**
-```
-shared_buffers = 256MB por nodo
-effective_cache_size = 1GB por nodo
-pgbench data size ~10MB (scale=10)
-```
-
-- El dataset de pgbench cabe completamente en cache
-- Con más clientes, competencia por shared_buffers
-- Sin L3 cache hits, latencia sube
-
-**Impacto:** Con 50+ clientes, page faults aumentan  
-**Solución:** Aumentar shared_buffers (pero limitado por contenedor)
-
----
-
-#### **Cuello de Botella #4: Replicación (WAL sender bottleneck)**
-
-**Evidencia:**
-```sql
--- En node1
-SELECT wal_write_time FROM pg_stat_replication;
--- ~5-8ms por batch de WAL durante benchmark en 50 clientes
-```
-
-- Sincronización de WAL con node2/node3 es ASÍNCRONA
-- Pero WAL writer espera si buffer está lleno
-- Máximo 10 wal_senders simultáneos
-
-**Impacto:** Escrituras se ralentizan si WAL no se drena  
-**Solución:** Aumentar wal_buffers o pasar a synchronous_commit (pero eso desacelera más)
-
----
-
-#### **Cuello de Botella #5: Locks de PostgreSQL**
-
-**Evidencia:**
-- pgbench usa `UPDATE accounts SET balance = balance + delta`
-- Con 50 clientes hitting mismas filas, competencia por locks
-- Latencia sube de 54ms (10 clientes) → 198ms (50 clientes) = 3.67x
-
-**Análisis:**
-```
-10 clientes:  54ms latencia  = light contention
-25 clientes: 146ms latencia  = moderate contention (2.7x)
-50 clientes: 198ms latencia  = heavy contention (3.67x)
-```
-
-**Impacto:** Lock contention crece cuadráticamente con clientes  
-**Solución:** Aumentar tamaño de tabla (scale=100 en lugar de 10), mejorar índices
-
----
-
-#### **Cuello de Botella #6: HAProxy backend health checks**
-
-**Evidencia:**
-- HAProxy hace health checks cada N segundos
-- Si un backend cae, failover tarda 3-5 segundos
-
-**Análisis:**
-- Health checks no son el cuello en lectura pura
-- Pero afecta en cargas mixtas
-
-**Impacto:** Minor (~1-2%)  
-**Solución:** Aumentar health check frequency (si es crítico)
-
----
-
-### 8.3 Tabla Comparativa de Recursos (CPU, RAM, I/O, Red)
-
-Tomadas con `docker stats --no-stream` durante cada benchmark:
-
-#### **Recurso: CPU**
-
-| Escenario | node1 | node2 | node3 | Proxy | Total |
-|---|---|---|---|---|---|
-| Baseline (0 clientes) | 2% | 2% | 2% | 1% | 7% |
-| 10 clientes | 25% | 18% | 18% | 5% | 66% |
-| 25 clientes | 45% | 32% | 32% | 8% | 117% (multi-core) |
-| 50 clientes | 65% | 48% | 48% | 12% | 173% |
-| node3 DOWN (50c) | 72% | 0% (down) | — | 15% | ~87% |
-| node3 RECOVERING | 68% | 52% | 62% | 14% | 196% |
-
-**Conclusión CPU:**
-- node1 es el bottleneck (65-72% vs 48-50% en nodes)
-- Solo usa 1 core → limitado a 100% por core
-- Multi-core sería game-changer
-
----
-
-#### **Recurso: RAM**
-
-| Escenario | node1 | node2 | node3 | Prometheus | Grafana |
-|---|---|---|---|---|---|
-| Baseline | 320MB | 310MB | 310MB | 150MB | 180MB |
-| 10 clientes | 340MB | 330MB | 330MB | 155MB | 185MB |
-| 25 clientes | 360MB | 350MB | 350MB | 160MB | 190MB |
-| 50 clientes | 385MB | 375MB | 375MB | 170MB | 200MB |
-| Max utilización | 420MB | 400MB | 400MB | 220MB | 250MB |
-
-**Límite:** Container está limitado a 512MB  
-**Utilización:** ~80% en pico  
-**Conclusión RAM:** No es bottleneck (amplio margen disponible)
-
----
-
-#### **Recurso: I/O (Disk)**
-
-Medida con `iostat -x 1` en nodos:
-
-| Métrica | Baseline | 50 clientes | node3 recovering |
-|---|---|---|---|
-| rps (reads/sec) | ~50 | ~1,200 | ~2,500 |
-| wps (writes/sec) | ~10 | ~280 | ~450 |
-| avg I/O time | 0.8ms | 2.1ms | 3.5ms |
-| %util | 5% | 18% | 35% |
-
-**Conclusión I/O:** Bajo impacto
-- Datos están en cache (no hay disk reads durante benchmark)
-- Escrituras son principalmente WAL (sequential, rápido)
-- Discos Docker virtuales tienen overhead mínimo
-
----
-
-#### **Recurso: Red**
-
-Medida en interfaz docker0 con `iftop`:
-
-| Tráfico | Dirección | 10c | 25c | 50c | node3 recovering |
-|---|---|---|---|---|---|
-| **HAProxy → Clients** | egress | 5MB/s | 8MB/s | 12MB/s | 11MB/s |
-| **Clients → HAProxy** | ingress | 2MB/s | 3.5MB/s | 5MB/s | 4.8MB/s |
-| **WAL Replication** | node1→node2,3 | 1.2MB/s | 2.1MB/s | 3.8MB/s | 8.5MB/s (spike) |
-| **Prometheus scrape** | 172.19.0.9 → exp | 50KB/s | 50KB/s | 50KB/s | 50KB/s |
-| **Total BW** | — | 8.2MB/s | 13.6MB/s | 20.8MB/s | 24.3MB/s |
-
-**Ancho de banda disponible:** ~1Gbps en Docker bridge  
-**Utilización máxima:** 24.3MB/s = 0.19% ✅ No es bottleneck
-
-**Aber Latencia de red:**
-- Latencia Docker bridge: 0.1-0.5ms
-- Client → Proxy → Backend: 0.5-1.5ms (1 hop)
-- Client → Proxy → Replica: 1-2ms (2+ hops)
-- **Impacto:** 3.26x aumento de latencia (0.4ms → 1.35ms) con 3 nodos
-
----
-
-### 8.4 Conclusión: Ranking de Cuellos de Botella
-
-**Orden de impacto en rendimiento:**
-
-1. **🔴 CPU del primario (65-72%)** — CRÍTICO
-   - Limita TPS agregado
-   - Replicación añade overhead
-   - Solución: Multi-core, mejor scheduling
-
-2. **🟠 Latencia de red Docker (0.4ms → 1.35ms)** — ALTO
-   - Impacta rendimiento con múltiples nodos
-   - Locks y contención penalizados por latencia
-   - Solución: Host networking, network optimization
-
-3. **🟡 Lock contention (crece con clientes)** — MEDIO
-   - Latencia de 54ms → 198ms (3.67x)
-   - Afecta escalabilidad concurrente
-   - Solución: Particionamiento vertical, mejor esquema
-
-4. **🟡 WAL Replication overhead (~5-8% CPU)** — MEDIO
-   - Necesario para HA pero tiene costo
-   - Solución: Synchronous replication solo en failover
-
-5. **🟢 Memoria (350-420MB vs 512MB límite)** — BAJO
-   - ~80% utilización, margen suficiente
-   - Solución: OK como está
-
-6. **🟢 I/O Disk (~18% utilización)** — BAJO
-   - Datos en cache, buena performance
-   - Solución: OK como está
-
-7. **🟢 Ancho de banda red (0.19% utilización)** — BAJO
-   - Plenty de headroom
-   - Solución: OK como está
 
 ---
 
@@ -666,7 +404,7 @@ Medida en interfaz docker0 con `iftop`:
 ### 9.1 Acceso
 
 **URL:** http://localhost:3000  
-**Credenciales:** admin / admin  
+**Credenciales:** admin / admin123  
 **DataSource:** Prometheus (http://prometheus:9090)
 
 ### 9.2 Métricas Disponibles
